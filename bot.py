@@ -62,13 +62,13 @@ class PumpFunSniper:
                          (user_id INT PRIMARY KEY, paid_until DATE)''')
 
     async def update_subscription(self, user_id: int, days: int = 30):
-    with sqlite3.connect(DATABASE) as conn:  # <-- Добавлен отступ (4 пробела)
+    with sqlite3.connect(DATABASE) as conn:    
         paid_until = datetime.now() + timedelta(days=days)
         conn.execute(
             "INSERT OR REPLACE INTO users VALUES (?, ?)",
             (user_id, paid_until.strftime("%Y-%m-%d"))  # Закрывающая скобка
         )
-        conn.commit()  # <-- Отступ внутри блока with
+        conn.commit()    
             
     async def check_payment(self, user_id: int) -> bool:
         try:
