@@ -62,14 +62,14 @@ class PumpFunSniper:
                          (user_id INT PRIMARY KEY, paid_until DATE)''')
 
     async def update_subscription(self, user_id: int, days: int = 30):
-    with sqlite3.connect(DATABASE) as conn:    
-        paid_until = datetime.now() + timedelta(days=days)
-        conn.execute(
-            "INSERT OR REPLACE INTO users VALUES (?, ?)",
-            (user_id, paid_until.strftime("%Y-%m-%d"))  # Закрывающая скобка
-        )
-        conn.commit()    
-            
+        with sqlite3.connect(DATABASE) as conn:
+            paid_until = datetime.now() + timedelta(days=days)
+            conn.execute(
+                "INSERT OR REPLACE INTO users VALUES (?, ?)",
+                (user_id, paid_until.strftime("%Y-%m-%d"))
+            )
+            conn.commit()
+
     async def check_payment(self, user_id: int) -> bool:
         try:
             resp = await self.client.get_signatures_for_address(PAYMENT_WALLET)
@@ -83,6 +83,22 @@ class PumpFunSniper:
             logger.error(f"Payment check error: {str(e)}")
             return False
 
+    async def analyze_token(self, token_address: str) -> dict:
+        url = f"https://api.dexscreener.com/latest/dex/tokens/{token_address}"
+        async with self.http_session.get(url) as resp:
+            data = await resp.json()
+        
+        holders = await self.get_holders(token_address)
+        prices = [float(x['priceUsd']) for x in data['pairs'][0]['priceHistory']['5m']]
+        
+        return {
+            'liquidity': float(data['pairs'][0]['liquidity']['usd']),
+            'holders': len(holders),
+            'concentration': self.calculate_concentration(holders),
+            'volatility': np.std(prices)/np.mean(prices),
+            'volume_change': self.calculate_volume_change(data)
+        }
+
     async def get_holders(self, token_address: str) -> list:
         try:
             url = f"https://api.solscan.io/token/holders?token={token_address}&offset=0&limit=10"
@@ -92,6 +108,13 @@ class PumpFunSniper:
         except Exception as e:
             logger.error(f"Holders fetch error: {str(e)}")
             return []
+
+    def calculate_concentration(self, holders):
+        if not holders:
+            return 1.0
+        top5 = sum(h['amount'] for h in holders[:5])
+        total = sum(h['amount'] for h in holders)
+        return top5 / total
 
     def calculate_volume_change(self, data: dict) -> float:
         try:
@@ -117,22 +140,13 @@ class PumpFunSniper:
             if not self.is_safe(analysis):
                 return "High risk token - trade canceled"
             
-            # Реальная логика торговли через Raydium API
-            trade_url = "https://api.raydium.io/v2/sdk/swap/"
-            payload = {
-                "token": token_address,
-                "amount": 0.01 if action == 'buy' else -0.01,
-                "slippage": 0.5
-            }
-            
-            async with self.http_session.post(trade_url, json=payload) as resp:
-                result = await resp.json()
-                
-            if result['status'] == 'success':
-                logger.info(f"Trade {action} executed for {token_address}")
-                return "Trade executed successfully"
-            return "Trade failed"
-            
+            tx = Transaction().add(transfer(TransferParams(
+                from_pubkey=self.keypair.pubkey(),
+                to_pubkey=Pubkey.from_string(token_address),
+                lamports=int(0.01 * 10**9)
+            )
+            await self.client.send_transaction(tx, self.keypair)
+            return "Trade executed successfully"
         except Exception as e:
             logger.error(f"Trade error: {str(e)}")
             return f"Error: {str(e)}"
@@ -144,23 +158,16 @@ class PumpFunSniper:
                 current_price = await self.get_price(token_address)
                 change = (current_price - entry_price) / entry_price
                 
-                if change >= self.risk_params['take_profit']:
+                if change >= self.risk_params['take_profit'] or change <= self.risk_params['stop_loss']:
                     await self.execute_trade(token_address, 'sell')
                     break
-                    
-                if change <= self.risk_params['stop_loss']:
-                    await self.execute_trade(token_address, 'sell')
-                    break
-                    
                 await asyncio.sleep(10)
         except Exception as e:
             logger.error(f"Monitoring error: {str(e)}")
 
     async def get_price(self, token_address: str) -> float:
         try:
-            async with self.http_session.get(
-                f"https://api.pump.fun/price/{token_address}"
-            ) as resp:
+            async with self.http_session.get(f"https://api.pump.fun/price/{token_address}") as resp:
                 return float(await resp.text())
         except:
             return 0.0
