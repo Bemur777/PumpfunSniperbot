@@ -140,10 +140,14 @@ class PumpFunSniper:
             if not self.is_safe(analysis):
                 return "High risk token - trade canceled"
             
-            tx = Transaction().add(transfer(TransferParams(
-                from_pubkey=self.keypair.pubkey(),
-                to_pubkey=Pubkey.from_string(token_address),
-                lamports=int(0.01 * 10**9)
+            tx = Transaction().add(
+                transfer(
+                    TransferParams(
+                        from_pubkey=self.keypair.pubkey(),
+                        to_pubkey=Pubkey.from_string(token_address),
+                        lamports=int(0.01 * 10**9)
+                    )
+                )
             )
             await self.client.send_transaction(tx, self.keypair)
             return "Trade executed successfully"
